@@ -117,8 +117,8 @@ def application(environ, start_response):
     webhook = DiscordWebhook(url=webhook_url, rate_limit_retry=True)
     embed = DiscordEmbed(title='Webhook Event Received',
             color='cccccc')
-    embed.set_author(name=bzdata['event']['user']['real_name'],
-            icon_url="https://secure.gravatar.com/avatar/%s?d=mm&size=64" % hashlib.md5(bzdata['event']['user']['login'].encode('utf-8')).hexdigest())
+    embed.set_author(name=event['user']['realname'] or event['user']['login'],
+            icon_url="https://secure.gravatar.com/avatar/%s?d=mm&size=64" % hashlib.md5(event['user']['login'].encode('utf-8')).hexdigest())
     bug = {}
     if "bug" in bzdata:
         bug = bzdata['bug']
