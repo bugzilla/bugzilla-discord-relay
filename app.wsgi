@@ -139,7 +139,7 @@ def application(environ, start_response):
                 embed.add_embed_field(name='Bug modified', value='Click through for details', inline=False)
             else:
                 for change in event['changes']:
-                    embed.add_embed_field(name='Field Modified: %s' % change['field'], value='', inline=False)
+                    embed.add_embed_field(name='━━━━━━━━━━', value='**Field Modified:** %s' % change['field'], inline=False)
                     embed.add_embed_field(name='Removed', value=change['removed'], inline=True)
                     embed.add_embed_field(name='Added', value=change['added'], inline=True)
                     if change['field'] == 'status' and change['added'] == 'RESOLVED':
