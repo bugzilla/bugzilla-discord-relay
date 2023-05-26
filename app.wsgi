@@ -122,13 +122,16 @@ def application(environ, start_response):
     bug = {}
     if "bug" in bzdata:
         bug = bzdata['bug']
-        embed.set_title("%s - %s" % (bug['id'], bug['summary']))
+        title = "%s - %s" % (bug['id'], bug['summary'])
+        if len(title) > 256:
+            title = title[:256]
+        embed.set_title(title)
         embed.set_description("%s (%s) in %s - %s. Last updated %s" % (bug['status'], bug['assigned_to'], bug['product'], bug['component'], bug['last_change_time']))
         embed.set_url("%s/show_bug.cgi?id=%s" % (baseurl, bug['id']))
     if event['target'] == 'bug':
         if event['action'] == 'modify':
             for change in event['changes']:
-                embed.add_embed_field(name='Field Modified: %s' % change['field'], value=' ', inline=False)
+                embed.add_embed_field(name='Field Modified: %s' % change['field'], value='', inline=False)
                 embed.add_embed_field(name='Removed', value=change['removed'], inline=True)
                 embed.add_embed_field(name='Added', value=change['added'], inline=True)
                 if change['field'] == 'status' and change['added'] == 'RESOLVED':
