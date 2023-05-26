@@ -157,7 +157,7 @@ def application(environ, start_response):
             commentbody = bug['comment']['body']
             if len(commentbody) > 400:
                 commentbody = commentbody[:400]
-                commentbody += " [truncated]"
+                commentbody += "\n**[truncated]**"
             embed.add_embed_field(name='Comment #%s added:' % bug['comment']['number'], value=commentbody, inline=False)
         else:
             embed.set_description("Unhandled comment action: %s" % event["action"])
