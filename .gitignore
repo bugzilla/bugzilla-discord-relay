@@ -1,6 +1,9 @@
 # ignore Mac droppings
 .DS_Store
 
+# ignore spool dir
+/spool
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
