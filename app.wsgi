@@ -122,20 +122,28 @@ def application(environ, start_response):
     bug = {}
     if "bug" in bzdata:
         bug = bzdata['bug']
+        if bug['is_private']:
+            bug['summary'] = 'Private Bug'
         title = "%s - %s" % (bug['id'], bug['summary'])
         if len(title) > 256:
             title = title[:256]
         embed.set_title(title)
-        embed.set_description("%s (%s) in %s - %s. Last updated %s" % (bug['status'], bug['assigned_to'], bug['product'], bug['component'], bug['last_change_time']))
+        if bug['is_private']:
+            embed.set_description("Private Bug - click through (with adequate permissions) to view details.")
+        else:
+            embed.set_description("%s (%s) in %s - %s. Last updated %s" % (bug['status'], bug['assigned_to'], bug['product'], bug['component'], bug['last_change_time']))
         embed.set_url("%s/show_bug.cgi?id=%s" % (baseurl, bug['id']))
     if event['target'] == 'bug':
         if event['action'] == 'modify':
-            for change in event['changes']:
-                embed.add_embed_field(name='Field Modified: %s' % change['field'], value='', inline=False)
-                embed.add_embed_field(name='Removed', value=change['removed'], inline=True)
-                embed.add_embed_field(name='Added', value=change['added'], inline=True)
-                if change['field'] == 'status' and change['added'] == 'RESOLVED':
-                    embed.set_color('ff0000')
+            if bug['is_private']:
+                embed.add_embed_field(name='Bug modified', value='Click through for details', inline=False)
+            else:
+                for change in event['changes']:
+                    embed.add_embed_field(name='Field Modified: %s' % change['field'], value='', inline=False)
+                    embed.add_embed_field(name='Removed', value=change['removed'], inline=True)
+                    embed.add_embed_field(name='Added', value=change['added'], inline=True)
+                    if change['field'] == 'status' and change['added'] == 'RESOLVED':
+                        embed.set_color('ff0000')
         elif event['action'] == 'create':
             embed.set_color('00ff00')
             embed.add_embed_field(name='New bug filed:', value=' ', inline=False)
