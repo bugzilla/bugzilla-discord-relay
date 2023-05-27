@@ -147,7 +147,7 @@ def application(environ, start_response):
                         embed.set_color('ff0000')
         elif event['action'] == 'create':
             embed.set_color('00ff00')
-            embed.add_embed_field(name='New bug filed:', value=' ', inline=False)
+            embed.add_embed_field(name='New bug filed with fields:', value=' ', inline=False)
             for field in bug:
                 if field not in ['id','assigned_to','status','summary','last_change_time','creator','creation_time','classification','product','component'] and isinstance(bug[field], str) and bug[field] not in ['', '--', '---']:
                     embed.add_embed_field(name=field, value=bug[field], inline=True)
@@ -159,7 +159,11 @@ def application(environ, start_response):
             if len(commentbody) > 400:
                 commentbody = commentbody[:400]
                 commentbody += "\n**[truncated]**"
-            embed.add_embed_field(name='Comment #%s added:' % bug['comment']['number'], value=commentbody, inline=False)
+            if bug['comment']['number'] == 0:
+                embed.set_color('00ff00')
+                embed.add_embed_field(name='New bug filed with description:', value=commentbody, inline=False)
+            else:
+                embed.add_embed_field(name='Comment #%s added:' % bug['comment']['number'], value=commentbody, inline=False)
         else:
             embed.set_description("Unhandled comment action: %s" % event["action"])
     elif event['target'] == 'attachment':
