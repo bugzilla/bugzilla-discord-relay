@@ -135,6 +135,7 @@ def application(environ, start_response):
         embed.set_url("%s/show_bug.cgi?id=%s" % (baseurl, bug['id']))
     if event['target'] == 'bug':
         if event['action'] == 'modify':
+            embed.set_color('ffff00')
             if bug['is_private']:
                 embed.add_embed_field(name='Bug modified', value='Click through for details', inline=False)
             else:
