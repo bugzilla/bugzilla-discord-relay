@@ -164,7 +164,7 @@ def application(environ, start_response):
     elif event['target'] == 'attachment':
         attachment = bug['attachment']
         if event['action'] == 'create':
-            embed.set_color('77ff77')
+            embed.set_color('ff00ff')
             embed.add_embed_field(name='Attachment added', value=attachment['file_name'], inline=False)
             embed.add_embed_field(name='Description', value=attachment['description'], inline=False)
             embed.add_embed_field(name='Content-Type', value=attachment['content_type'], inline=True)
