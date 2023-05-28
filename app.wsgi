@@ -162,7 +162,7 @@ def application(environ, start_response):
             if len(commentbody) > 1000:
                 commentbody = commentbody[:1000]
                 commentbody += "\n**[truncated]**"
-            elif commentbody = '':
+            elif commentbody == '':
                 # marking as duplicate and adding an attachment with no
                 # description will transmit an empty comment, so just ignore
                 # these when we get them.
