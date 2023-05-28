@@ -159,8 +159,8 @@ def application(environ, start_response):
     elif event['target'] == 'comment':
         if event['action'] == 'create':
             commentbody = bug['comment']['body']
-            if len(commentbody) > 400:
-                commentbody = commentbody[:400]
+            if len(commentbody) > 1000:
+                commentbody = commentbody[:1000]
                 commentbody += "\n**[truncated]**"
             if bug['comment']['number'] == 0:
                 embed.set_color('00ff00')
