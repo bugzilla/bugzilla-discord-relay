@@ -162,6 +162,17 @@ def application(environ, start_response):
             if len(commentbody) > 1000:
                 commentbody = commentbody[:1000]
                 commentbody += "\n**[truncated]**"
+            elif commentbody = '':
+                # marking as duplicate and adding an attachment with no
+                # description will transmit an empty comment, so just ignore
+                # these when we get them.
+                # Send a success response back to the caller and bail
+                error_log(environ, 'Ignoring webhook for comment.create with empty comment body.')
+                output = bytes('success\n', encoding="utf-8")
+                response_headers = [('Content-type', 'text/plain, charset=utf-8'),
+                                    ('Content-Length', str(len(output)))]
+                start_response("200 OK", response_headers)
+                return [output]
             if bug['comment']['number'] == 0:
                 embed.set_color('00ff00')
                 embed.add_embed_field(name='New bug filed with description:', value=commentbody, inline=False)
