@@ -158,7 +158,11 @@ def application(environ, start_response):
             save_payload_to_spool(environ, body)
     elif event['target'] == 'comment':
         if event['action'] == 'create':
-            commentbody = bug['comment']['body']
+            commentbody = ''
+            if comment['is_private']:
+                commentbody = "Private comment - click through (with adequate permissions) to view"
+            else:
+                commentbody = bug['comment']['body']
             if len(commentbody) > 1000:
                 commentbody = commentbody[:1000]
                 commentbody += "\n**[truncated]**"
