@@ -53,7 +53,7 @@ def error400_response(environ, start_response, logerror, publicerror):
     start_response(status, response_headers)
     return [output]
 
-def save_payload_to_spool(environ, body):
+def save_payload_to_spool(environ, body, routing_key):
     # write what we received from Bugzilla to our spool directory for later debugging
     timestamp = datetime.datetime.utcnow()
     timestamp_string = timestamp.strftime("%Y%m%dT%H%M%SZ")
@@ -63,7 +63,7 @@ def save_payload_to_spool(environ, body):
     fd = open(filename, "wb");
     fd.write(body)
     fd.close()
-    error_log(environ, "payload for '%s' written to %s" % (bzdata['event']['routing_key'], filename))
+    error_log(environ, "payload for '%s' written to %s" % (routing_key, filename))
     return
 
 def application(environ, start_response):
@@ -155,7 +155,7 @@ def application(environ, start_response):
             embed.set_description("Unhandled bug action: %s" % event["action"])
             error_log(environ, "Unhandled bug action: $s" % event["action"])
             # write what we received from Bugzilla to our spool directory for later debugging
-            save_payload_to_spool(environ, body)
+            save_payload_to_spool(environ, body, event['routing_key'])
     elif event['target'] == 'comment':
         if event['action'] == 'create':
             commentbody = ''
@@ -186,7 +186,7 @@ def application(environ, start_response):
             embed.set_description("Unhandled comment action: %s" % event["action"])
             error_log(environ, "Unhandled comment action: $s" % event["action"])
             # write what we received from Bugzilla to our spool directory for later debugging
-            save_payload_to_spool(environ, body)
+            save_payload_to_spool(environ, body, event['routing_key'])
     elif event['target'] == 'attachment':
         attachment = bug['attachment']
         if event['action'] == 'create':
@@ -201,7 +201,7 @@ def application(environ, start_response):
         embed.add_embed_field(name="Event Type", value=event['routing_key'], inline=False)
         error_log(environ, "Unhandled event type: %s" % event['routing_key'])
         # write what we received from Bugzilla to our spool directory for later debugging
-        save_payload_to_spool(environ, body)
+        save_payload_to_spool(environ, body, event['routing_key'])
     webhook.add_embed(embed)
     error_log(environ, "Forwarding webhook for %s to Discord!" % event['routing_key'])
     response = webhook.execute()
@@ -216,7 +216,7 @@ def application(environ, start_response):
         error_log(environ, status)
         error_log(environ, response.content)
         # write what we received from Bugzilla to our spool directory for later debugging
-        save_payload_to_spool(environ, body)
+        save_payload_to_spool(environ, body, event['routing_key'])
 
     start_response(status, list(response.headers.items()))
     return [response.content]
