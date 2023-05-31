@@ -159,7 +159,7 @@ def application(environ, start_response):
     elif event['target'] == 'comment':
         if event['action'] == 'create':
             commentbody = ''
-            if comment['is_private']:
+            if bug['comment']['is_private']:
                 commentbody = "Private comment - click through (with adequate permissions) to view"
             else:
                 commentbody = bug['comment']['body']
@@ -177,7 +177,9 @@ def application(environ, start_response):
                                     ('Content-Length', str(len(output)))]
                 start_response("200 OK", response_headers)
                 return [output]
-            if bug['comment']['number'] == 0:
+            if bug['comment']['is_private']:
+                embed.add_embed_field(name="A private comment was added:", value=commentbody, inline=False)
+            elif bug['comment']['number'] == 0:
                 embed.set_color('00ff00')
                 embed.add_embed_field(name='New bug filed with description:', value=commentbody, inline=False)
             else:
