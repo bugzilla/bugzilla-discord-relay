@@ -219,6 +219,8 @@ def application(environ, start_response):
         error_log(environ, response.content)
         # write what we received from Bugzilla to our spool directory for later debugging
         save_payload_to_spool(environ, body, event['routing_key'])
+        # and what we tried to send to Discord
+        save_payload_to_spool(environ, bytes(json.dumps(webhook.json),"utf-8"), 'Discord Webhook Payload')
 
     start_response(status, list(response.headers.items()))
     return [response.content]
