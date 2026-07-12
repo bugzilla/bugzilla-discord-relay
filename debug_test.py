@@ -6,7 +6,7 @@
 
 # This is a debug script to test the webhooks with previously-captured
 # data. It needs two arguments:
-# 1) The webhook URL of the RELAY server (not Discord)
+# 1) The webhook URL of the RELAY server (not Discord) as entered in Bugzilla's WebHook configuration.
 # 2) Path to a file to send as the payload.
 
 import sys
@@ -16,7 +16,7 @@ import requests
 def usage():
     print("Usage: %s WEBHOOK_URL PAYLOADFILE" % sys.argv[0])
     print()
-    print("WEBHOOK_URL is the URL of the RELAY server (not Discord)")
+    print("WEBHOOK_URL is the URL of the RELAY server (not Discord) as entered in Bugzilla's WebHook configuration")
     print("PAYLOADFILE is the path to a file to send as payload")
     sys.exit(0)
 
