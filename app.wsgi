@@ -134,40 +134,61 @@ def application(environ, start_response):
 
     baseurl = config['webhooks'][webhook_id]['source_baseurl']
 
+    def build_base_embed(event, bug, baseurl):
+        embed = DiscordEmbed(title='Webhook Event Received',
+                color='cccccc')
+        embed.set_author(name=event['user']['real_name'] or event['user']['login'],
+                icon_url="https://secure.gravatar.com/avatar/%s?d=mm&size=64" % hashlib.md5(event['user']['login'].encode('utf-8')).hexdigest())
+        if bug:
+            if bug['is_private']:
+                bug['summary'] = 'Private Bug'
+            title = "%s - %s" % (bug['id'], bug['summary'])
+            if len(title) > 256:
+                title = title[:256]
+            embed.set_title(title)
+            if bug['is_private']:
+                embed.set_description("Private Bug - click through (with adequate permissions) to view details.")
+            else:
+                embed.set_description("%s (%s) in %s - %s. Last updated %s" % (bug['status'], bug['assigned_to'], bug['product'], bug['component'], bug['last_change_time']))
+            embed.set_url("%s/show_bug.cgi?id=%s" % (baseurl, bug['id']))
+        return embed
+
     # process the hook and deal with it properly
     webhook_url = config['webhooks'][webhook_id]['destination_webhook']
     event = bzdata['event']
-    webhook = DiscordWebhook(url=webhook_url, rate_limit_retry=True)
-    embed = DiscordEmbed(title='Webhook Event Received',
-            color='cccccc')
-    embed.set_author(name=event['user']['real_name'] or event['user']['login'],
-            icon_url="https://secure.gravatar.com/avatar/%s?d=mm&size=64" % hashlib.md5(event['user']['login'].encode('utf-8')).hexdigest())
+    embed = build_base_embed(event, {}, baseurl)
+    embeds_to_send = [embed]
     bug = {}
     if "bug" in bzdata:
         bug = bzdata['bug']
-        if bug['is_private']:
-            bug['summary'] = 'Private Bug'
-        title = "%s - %s" % (bug['id'], bug['summary'])
-        if len(title) > 256:
-            title = title[:256]
-        embed.set_title(title)
-        if bug['is_private']:
-            embed.set_description("Private Bug - click through (with adequate permissions) to view details.")
-        else:
-            embed.set_description("%s (%s) in %s - %s. Last updated %s" % (bug['status'], bug['assigned_to'], bug['product'], bug['component'], bug['last_change_time']))
-        embed.set_url("%s/show_bug.cgi?id=%s" % (baseurl, bug['id']))
+        embed = build_base_embed(event, bug, baseurl)
+        embeds_to_send = [embed]
     if event['target'] == 'bug':
         if event['action'] == 'modify':
-            embed.set_color('ffff00')
             if bug['is_private']:
+                embed.set_color('ffff00')
                 embed.add_embed_field(name='Bug modified', value='Click through for details', inline=False)
             else:
-                for change in event['changes']:
-                    embed.add_embed_field(name='━━━━━━━━━━', value='**Field Modified:** %s' % change['field'], inline=False)
-                    embed.add_embed_field(name='Removed', value=change['removed'] or "_ _", inline=True)
-                    embed.add_embed_field(name='Added', value=change['added'] or "_ _", inline=True)
-                    if change['field'] == 'status' and change['added'] == 'RESOLVED':
-                        embed.set_color('ff0000')
+                # Discord allows at most 25 embed fields. Each Bugzilla change
+                # uses 3 fields, so limit each message chunk to 8 changes.
+                changes = event['changes']
+                chunk_size = 8
+                embeds_to_send = []
+                for i in range(0, len(changes), chunk_size):
+                    change_chunk = changes[i:i + chunk_size]
+                    chunk_embed = build_base_embed(event, bug, baseurl)
+                    chunk_embed.set_color('ffff00')
+                    for change in change_chunk:
+                        chunk_embed.add_embed_field(name='━━━━━━━━━━', value='**Field Modified:** %s' % change['field'], inline=False)
+                        chunk_embed.add_embed_field(name='Removed', value=change['removed'] or "_ _", inline=True)
+                        chunk_embed.add_embed_field(name='Added', value=change['added'] or "_ _", inline=True)
+                        if change['field'] == 'status' and change['added'] == 'RESOLVED':
+                            chunk_embed.set_color('ff0000')
+                    embeds_to_send.append(chunk_embed)
+                if len(embeds_to_send) == 0:
+                    embed.set_color('ffff00')
+                    embed.add_embed_field(name='Bug modified', value='Click through for details', inline=False)
+                    embeds_to_send = [embed]
         elif event['action'] == 'create':
             embed.set_color('00ff00')
             embed.add_embed_field(name='New bug filed with fields:', value=' ', inline=False)
@@ -227,9 +248,19 @@ def application(environ, start_response):
         error_log(environ, "Unhandled event type: %s" % event['routing_key'])
         # write what we received from Bugzilla to our spool directory for later debugging
         save_payload_to_spool(environ, body, event['routing_key'])
-    webhook.add_embed(embed)
-    error_log(environ, "Forwarding webhook for %s to Discord!" % event['routing_key'])
-    response = webhook.execute()
+    response = None
+    webhook = None
+    total_embeds = len(embeds_to_send)
+    for idx, pending_embed in enumerate(embeds_to_send, start=1):
+        webhook = DiscordWebhook(url=webhook_url, rate_limit_retry=True)
+        webhook.add_embed(pending_embed)
+        if total_embeds > 1:
+            error_log(environ, "Forwarding webhook for %s to Discord! (%d/%d)" % (event['routing_key'], idx, total_embeds))
+        else:
+            error_log(environ, "Forwarding webhook for %s to Discord!" % event['routing_key'])
+        response = webhook.execute()
+        if response.status_code != 200:
+            break
 
     # Forward Discord's response back to the caller
     status = "%s %s" % (response.status_code, response.reason)
