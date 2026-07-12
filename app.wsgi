@@ -109,6 +109,29 @@ def application(environ, start_response):
                 "Payload data is not valid JSON",
                 "Payload data is not valid JSON")
 
+    if 'event' not in bzdata or not isinstance(bzdata['event'], dict):
+        error_log(environ, "Payload missing required 'event' object")
+        save_payload_to_spool(environ, body, 'invalid.missing_event')
+        return error400_response(environ, start_response,
+                "Payload missing required 'event' object",
+                "Payload is missing required event data")
+
+    required_event_keys = ['user', 'target', 'action', 'routing_key']
+    for required_key in required_event_keys:
+        if required_key not in bzdata['event']:
+            error_log(environ, "Payload event missing required key '%s'" % required_key)
+            save_payload_to_spool(environ, body, 'invalid.missing_event_key')
+            return error400_response(environ, start_response,
+                    "Payload event missing required key '%s'" % required_key,
+                    "Payload is missing required event data")
+
+    if 'login' not in bzdata['event']['user']:
+        error_log(environ, "Payload event user missing required key 'login'")
+        save_payload_to_spool(environ, body, 'invalid.missing_event_user_login')
+        return error400_response(environ, start_response,
+                "Payload event user missing required key 'login'",
+                "Payload is missing required event user data")
+
     baseurl = config['webhooks'][webhook_id]['source_baseurl']
 
     # process the hook and deal with it properly
