@@ -242,6 +242,21 @@ def application(environ, start_response):
             embed.add_embed_field(name='Content-Type', value=attachment['content_type'], inline=True)
             if attachment['content_type'][:6] == 'image/':
                 embed.set_image('%s/attachment.cgi?id=%s' % (baseurl, attachment['id']))
+        elif event['action'] == 'modify':
+            embed.set_color('ffff00')
+            embed.add_embed_field(name='Attachment modified', value=attachment['file_name'], inline=False)
+            if attachment['description']:
+                embed.add_embed_field(name='Description', value=attachment['description'], inline=False)
+            changes = event.get('changes', [])
+            for change in changes:
+                field_name = change['field']
+                if field_name.startswith('flag.'):
+                    field_name = 'Flag: %s' % field_name.split('.', 1)[1]
+                old_value = change['removed'] or '(unset)'
+                new_value = change['added'] or '(unset)'
+                embed.add_embed_field(name=field_name, value='%s -> %s' % (old_value, new_value), inline=False)
+            if len(changes) == 0:
+                embed.add_embed_field(name='Attachment modified', value='Click through for details', inline=False)
     else:
         embed.set_description("Unhandled event type")
         embed.add_embed_field(name="Event Type", value=event['routing_key'], inline=False)
