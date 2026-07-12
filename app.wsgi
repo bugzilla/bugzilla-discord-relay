@@ -141,8 +141,8 @@ def application(environ, start_response):
             else:
                 for change in event['changes']:
                     embed.add_embed_field(name='━━━━━━━━━━', value='**Field Modified:** %s' % change['field'], inline=False)
-                    embed.add_embed_field(name='Removed', value=change['removed'], inline=True)
-                    embed.add_embed_field(name='Added', value=change['added'], inline=True)
+                    embed.add_embed_field(name='Removed', value=change['removed'] or "_ _", inline=True)
+                    embed.add_embed_field(name='Added', value=change['added'] or "_ _", inline=True)
                     if change['field'] == 'status' and change['added'] == 'RESOLVED':
                         embed.set_color('ff0000')
         elif event['action'] == 'create':
