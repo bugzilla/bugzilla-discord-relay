@@ -15,6 +15,13 @@ import datetime
 import requests
 from discord_webhook import DiscordWebhook, DiscordEmbed
 
+DEFAULT_MAX_REQUEST_BYTES = 262144
+DEFAULT_SPOOL_MAX_FILE_BYTES = 262144
+DEFAULT_SPOOL_MAX_FILES = 1000
+DEFAULT_SPOOL_MAX_TOTAL_BYTES = 104857600
+DEFAULT_SPOOL_MAX_AGE_DAYS = 14
+DEFAULT_SPOOL_ENABLED = False
+
 def error_log(environ, theError):
     print(theError, file=environ['wsgi.errors'])
 
@@ -54,18 +61,148 @@ def error400_response(environ, start_response, logerror, publicerror):
     start_response(status, response_headers)
     return [output]
 
-def save_payload_to_spool(environ, body, routing_key):
+def error413_response(environ, start_response, logerror, publicerror):
+    status = '413 Payload Too Large'
+    output = '<html><head><title>Payload Too Large</title></head>'
+    output += '<h1>Payload Too Large</h1>'
+    output += "<p>%s</p>" % publicerror
+    output = bytes(output, encoding='utf-8')
+    response_headers = [('Content-type', 'text/html, charset=utf-8'),
+                        ('Content-Length', str(len(output)))]
+    error_log(environ, logerror)
+    start_response(status, response_headers)
+    return [output]
+
+def config_int(config, key, default_value):
+    value = config.get(key, default_value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default_value
+
+def config_bool(config, key, default_value):
+    value = config.get(key, default_value)
+    if isinstance(value, bool):
+        return value
+    return default_value
+
+def effective_setting(config, webhook_config, key, default_value, converter=None):
+    if key in webhook_config:
+        value = webhook_config.get(key)
+        source = {key: value}
+    else:
+        value = config.get(key, default_value)
+        source = {key: value}
+
+    if converter:
+        return converter(source, key, default_value)
+    return value
+
+def spool_settings(config, webhook_config):
+    return {
+        'enabled': effective_setting(config, webhook_config, 'spool_enabled', DEFAULT_SPOOL_ENABLED, config_bool),
+        'max_file_bytes': effective_setting(config, webhook_config, 'spool_max_file_bytes', DEFAULT_SPOOL_MAX_FILE_BYTES, config_int),
+        'max_files': effective_setting(config, webhook_config, 'spool_max_files', DEFAULT_SPOOL_MAX_FILES, config_int),
+        'max_total_bytes': effective_setting(config, webhook_config, 'spool_max_total_bytes', DEFAULT_SPOOL_MAX_TOTAL_BYTES, config_int),
+        'max_age_days': effective_setting(config, webhook_config, 'spool_max_age_days', DEFAULT_SPOOL_MAX_AGE_DAYS, config_int),
+    }
+
+def prune_spool_directory(spooldir, settings):
+    now = datetime.datetime.utcnow().timestamp()
+    max_age_seconds = max(settings['max_age_days'], 0) * 86400
+    files = []
+    total_bytes = 0
+
+    if not spooldir.exists():
+        try:
+            spooldir.mkdir(mode=0o700, exist_ok=True)
+        except OSError as err:
+            raise OSError("Unable to create spool directory '%s': %s" % (spooldir, err)) from err
+
+    for entry in spooldir.iterdir():
+        if not entry.is_file():
+            continue
+        stat_result = entry.stat()
+        if max_age_seconds and (now - stat_result.st_mtime) > max_age_seconds:
+            try:
+                entry.unlink(missing_ok=True)
+            except OSError:
+                pass
+            continue
+        files.append((entry, stat_result.st_mtime, stat_result.st_size))
+        total_bytes += stat_result.st_size
+
+    files.sort(key=lambda item: item[1])
+    max_files = settings['max_files']
+    max_total_bytes = settings['max_total_bytes']
+
+    while files and ((max_files >= 0 and len(files) > max_files) or (max_total_bytes >= 0 and total_bytes > max_total_bytes)):
+        path, _, size = files.pop(0)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            # If we cannot prune this file, stop to avoid spinning forever.
+            break
+        total_bytes -= size
+
+    return files, total_bytes
+
+def save_payload_to_spool(environ, body, routing_key, config=None, webhook_config=None):
     # write what we received from Bugzilla to our spool directory for later debugging
+    settings = spool_settings(config or {}, webhook_config or {})
+    if not settings['enabled']:
+        return
+
+    body_size = len(body)
+    if settings['max_file_bytes'] >= 0 and body_size > settings['max_file_bytes']:
+        error_log(environ, "payload for '%s' not written to spool because it exceeds spool_max_file_bytes" % routing_key)
+        return
+
     timestamp = datetime.datetime.utcnow()
     timestamp_string = timestamp.strftime("%Y%m%dT%H%M%SZ")
     uniq_string = uuid.uuid4()
     mydir = pathlib.Path(__file__).parent.resolve()
-    filename = "%s/spool/%s-%s" % (mydir, timestamp_string, uniq_string)
-    fd = open(filename, "wb");
-    fd.write(body)
-    fd.close()
+    spooldir = mydir / 'spool'
+    try:
+        files, total_bytes = prune_spool_directory(spooldir, settings)
+    except OSError as err:
+        error_log(environ, "payload for '%s' not written to spool because spool directory is not writable: %s" % (routing_key, err))
+        return
+
+    if settings['max_files'] == 0 or settings['max_total_bytes'] == 0:
+        error_log(environ, "payload for '%s' not written to spool because spool limits disable writes" % routing_key)
+        return
+
+    if settings['max_files'] > 0 and len(files) >= settings['max_files']:
+        error_log(environ, "payload for '%s' not written to spool because spool_max_files has been reached" % routing_key)
+        return
+
+    if settings['max_total_bytes'] > 0 and (total_bytes + body_size) > settings['max_total_bytes']:
+        error_log(environ, "payload for '%s' not written to spool because spool_max_total_bytes would be exceeded" % routing_key)
+        return
+
+    filename = spooldir / ('%s-%s' % (timestamp_string, uniq_string))
+    try:
+        with open(filename, 'wb') as fd:
+            fd.write(body)
+        os.chmod(filename, 0o600)
+    except OSError as err:
+        error_log(environ, "payload for '%s' not written to spool because spool file write failed: %s" % (routing_key, err))
+        return
     error_log(environ, "payload for '%s' written to %s" % (routing_key, filename))
     return
+
+def request_content_length(environ):
+    content_length = environ.get('CONTENT_LENGTH', '0')
+    if content_length in (None, ''):
+        return 0, None
+    try:
+        parsed = int(content_length)
+    except ValueError:
+        return None, 'Request Content-Length is invalid.'
+    if parsed < 0:
+        return None, 'Request Content-Length is invalid.'
+    return parsed, None
 
 def request_header_name_to_environ_key(header_name):
     return 'HTTP_' + header_name.upper().replace('-', '_')
@@ -134,8 +271,19 @@ def application(environ, start_response):
                 auth_error,
                 "The webhook you specified does not exist.")
 
+    max_request_bytes = effective_setting(config, webhook_config, 'max_request_bytes', DEFAULT_MAX_REQUEST_BYTES, config_int)
+    content_length, content_length_error = request_content_length(environ)
+    if content_length_error:
+        return error400_response(environ, start_response,
+                content_length_error,
+                content_length_error)
+    if max_request_bytes >= 0 and content_length > max_request_bytes:
+        return error413_response(environ, start_response,
+                "Payload exceeds max_request_bytes.",
+                "Payload is too large.")
+
     input = environ['wsgi.input']
-    body = input.read(int(environ.get('CONTENT_LENGTH', '0')))
+    body = input.read(content_length)
     bzdata = {}
     try:
         bzdata = json.loads(body)
@@ -146,7 +294,7 @@ def application(environ, start_response):
 
     if 'event' not in bzdata or not isinstance(bzdata['event'], dict):
         error_log(environ, "Payload missing required 'event' object")
-        save_payload_to_spool(environ, body, 'invalid.missing_event')
+        save_payload_to_spool(environ, body, 'invalid.missing_event', config, webhook_config)
         return error400_response(environ, start_response,
                 "Payload missing required 'event' object",
                 "Payload is missing required event data")
@@ -155,14 +303,14 @@ def application(environ, start_response):
     for required_key in required_event_keys:
         if required_key not in bzdata['event']:
             error_log(environ, "Payload event missing required key '%s'" % required_key)
-            save_payload_to_spool(environ, body, 'invalid.missing_event_key')
+            save_payload_to_spool(environ, body, 'invalid.missing_event_key', config, webhook_config)
             return error400_response(environ, start_response,
                     "Payload event missing required key '%s'" % required_key,
                     "Payload is missing required event data")
 
     if 'login' not in bzdata['event']['user']:
         error_log(environ, "Payload event user missing required key 'login'")
-        save_payload_to_spool(environ, body, 'invalid.missing_event_user_login')
+        save_payload_to_spool(environ, body, 'invalid.missing_event_user_login', config, webhook_config)
         return error400_response(environ, start_response,
                 "Payload event user missing required key 'login'",
                 "Payload is missing required event user data")
@@ -234,7 +382,7 @@ def application(environ, start_response):
             embed.set_description("Unhandled bug action: %s" % event["action"])
             error_log(environ, "Unhandled bug action: $s" % event["action"])
             # write what we received from Bugzilla to our spool directory for later debugging
-            save_payload_to_spool(environ, body, event['routing_key'])
+            save_payload_to_spool(environ, body, event['routing_key'], config, webhook_config)
     elif event['target'] == 'comment':
         if event['action'] == 'create':
             commentbody = ''
@@ -267,7 +415,7 @@ def application(environ, start_response):
             embed.set_description("Unhandled comment action: %s" % event["action"])
             error_log(environ, "Unhandled comment action: $s" % event["action"])
             # write what we received from Bugzilla to our spool directory for later debugging
-            save_payload_to_spool(environ, body, event['routing_key'])
+            save_payload_to_spool(environ, body, event['routing_key'], config, webhook_config)
     elif event['target'] == 'attachment':
         attachment = bug['attachment']
         if event['action'] == 'create':
@@ -297,7 +445,7 @@ def application(environ, start_response):
         embed.add_embed_field(name="Event Type", value=event['routing_key'], inline=False)
         error_log(environ, "Unhandled event type: %s" % event['routing_key'])
         # write what we received from Bugzilla to our spool directory for later debugging
-        save_payload_to_spool(environ, body, event['routing_key'])
+        save_payload_to_spool(environ, body, event['routing_key'], config, webhook_config)
     response = None
     webhook = None
     total_embeds = len(embeds_to_send)
@@ -322,9 +470,9 @@ def application(environ, start_response):
         error_log(environ, status)
         error_log(environ, response.content)
         # write what we received from Bugzilla to our spool directory for later debugging
-        save_payload_to_spool(environ, body, event['routing_key'])
+        save_payload_to_spool(environ, body, event['routing_key'], config, webhook_config)
         # and what we tried to send to Discord
-        save_payload_to_spool(environ, bytes(json.dumps(webhook.json),"utf-8"), 'Discord Webhook Payload')
+        save_payload_to_spool(environ, bytes(json.dumps(webhook.json),"utf-8"), 'Discord Webhook Payload', config, webhook_config)
 
     start_response(status, list(response.headers.items()))
     return [response.content]
