@@ -41,7 +41,10 @@ Example config:
   "webhooks": {
     "{webhook id}": {
       "destination_webhook": "https://discord.com/api/webhooks/{random webhook code}",
-      "source_baseurl": "https://yourbugzilla.tld"
+      "source_baseurl": "https://yourbugzilla.tld",
+      "api_key_header": "X-Bugzilla-Webhook-Key",
+      "api_key_value": "current shared secret",
+      "api_key_value_next": "optional next shared secret"
     }
   }
 }
@@ -52,3 +55,5 @@ Example config:
 `destination_webhook` needs to be the full URL assigned to the webhook by Discord when you set it up in the Discord config.
 
 `source_baseurl` should contain the URL used as the "baseurl" for the Bugzilla the webhooks are coming from. For whatever reason, the payload of the webhook doesn't contain this anywhere, so this is needed to build the link to the bug that's included in the post to Discord. You should therefore assign a new webhook for any new Bugzilla you have pointed at it, so you can assign the baseurl to the correct Bugzilla.
+
+`api_key_header` and `api_key_value` are required by the relay and are sent by Bugzilla as a static shared-secret header on each webhook request. The header should generally start with "X-" and the value can be whatever you want, as long as the header and value both match what you enter in the config in Bugzilla when you create the webhook. `api_key_value_next` is optional and can be used during secret rotation so the relay will accept either the current secret or the next secret while you cut over the sender.

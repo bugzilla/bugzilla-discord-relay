@@ -8,6 +8,7 @@ import sys
 import os
 import json
 import uuid
+import hmac
 import hashlib
 import pathlib
 import datetime
@@ -66,6 +67,32 @@ def save_payload_to_spool(environ, body, routing_key):
     error_log(environ, "payload for '%s' written to %s" % (routing_key, filename))
     return
 
+def request_header_name_to_environ_key(header_name):
+    return 'HTTP_' + header_name.upper().replace('-', '_')
+
+def auth_value_matches(request_value, configured_value):
+    if request_value is None or configured_value is None:
+        return False
+    # compare_digest gives us a constant-time equality check for a shared secret.
+    return hmac.compare_digest(request_value, configured_value)
+
+def request_is_authorized(environ, webhook_config):
+    auth_header = webhook_config.get('api_key_header')
+    auth_value = webhook_config.get('api_key_value')
+    auth_value_next = webhook_config.get('api_key_value_next')
+
+    if not auth_header or not auth_value:
+        return False, "Webhook auth configuration is missing."
+
+    request_value = environ.get(request_header_name_to_environ_key(auth_header))
+    if auth_value_matches(request_value, auth_value):
+        return True, None
+
+    if auth_value_next and auth_value_matches(request_value, auth_value_next):
+        return True, None
+
+    return False, "Webhook auth header missing or invalid."
+
 def application(environ, start_response):
     if 'bz2discord_config' not in environ:
         return error500_response(environ, start_response,
@@ -97,6 +124,14 @@ def application(environ, start_response):
     if webhook_id not in config["webhooks"]:
         return error401_response(environ, start_response,
                 "Invalid webhook: %s" % webhook_id,
+                "The webhook you specified does not exist.")
+
+    webhook_config = config["webhooks"][webhook_id]
+    authorized, auth_error = request_is_authorized(environ, webhook_config)
+    if not authorized:
+        error_log(environ, "Unauthorized webhook request for '%s': %s" % (webhook_id, auth_error))
+        return error401_response(environ, start_response,
+                auth_error,
                 "The webhook you specified does not exist.")
 
     input = environ['wsgi.input']
@@ -132,7 +167,7 @@ def application(environ, start_response):
                 "Payload event user missing required key 'login'",
                 "Payload is missing required event user data")
 
-    baseurl = config['webhooks'][webhook_id]['source_baseurl']
+    baseurl = webhook_config['source_baseurl']
 
     def build_base_embed(event, bug, baseurl):
         embed = DiscordEmbed(title='Webhook Event Received',
@@ -154,7 +189,7 @@ def application(environ, start_response):
         return embed
 
     # process the hook and deal with it properly
-    webhook_url = config['webhooks'][webhook_id]['destination_webhook']
+    webhook_url = webhook_config['destination_webhook']
     event = bzdata['event']
     embed = build_base_embed(event, {}, baseurl)
     embeds_to_send = [embed]
