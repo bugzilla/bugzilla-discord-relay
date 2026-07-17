@@ -348,9 +348,9 @@ def application(environ, start_response):
         with open(configfile, 'r') as f:
             try:
                 config = json.load(f)
-            except json.JSONDecodeError(msg, doc, pos):
+            except json.JSONDecodeError as err:
                 return error500_response(environ, start_response,
-                    "config failed to load: %s" % msg,
+                    "config failed to load: %s" % err,
                     "Configuration error. See error log for details.")
     else:
         return error500_response(environ, start_response,
