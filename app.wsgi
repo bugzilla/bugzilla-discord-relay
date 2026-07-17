@@ -230,6 +230,91 @@ def request_is_authorized(environ, webhook_config):
 
     return False, "Webhook auth header missing or invalid."
 
+def validate_change_list(changes, change_list_name):
+    if not isinstance(changes, list):
+        return "%s must be a list." % change_list_name
+    for change in changes:
+        if not isinstance(change, dict):
+            return "%s entries must be objects." % change_list_name
+        for key in ('field', 'removed', 'added'):
+            if key not in change:
+                return "%s entries are missing required key '%s'." % (change_list_name, key)
+    return None
+
+def validate_payload_schema(bzdata):
+    if not isinstance(bzdata, dict):
+        return "Payload root object is invalid."
+
+    event = bzdata.get('event')
+    if not isinstance(event, dict):
+        return "Payload missing required 'event' object."
+
+    required_event_keys = ['user', 'target', 'action', 'routing_key']
+    for required_key in required_event_keys:
+        if required_key not in event:
+            return "Payload event missing required key '%s'." % required_key
+
+    user = event.get('user')
+    if not isinstance(user, dict):
+        return "Payload event user object is invalid."
+    if 'login' not in user:
+        return "Payload event user missing required key 'login'."
+
+    target = event.get('target')
+    action = event.get('action')
+    if target not in ('bug', 'comment', 'attachment'):
+        # Unknown targets are handled by the existing "Unhandled event type" path.
+        return None
+
+    bug = bzdata.get('bug')
+    if not isinstance(bug, dict):
+        return "Payload missing required 'bug' object."
+
+    for required_key in ('id', 'is_private'):
+        if required_key not in bug:
+            return "Payload bug missing required key '%s'." % required_key
+
+    if not bug.get('is_private'):
+        for required_key in ('summary', 'status', 'assigned_to', 'product', 'component', 'last_change_time'):
+            if required_key not in bug:
+                return "Payload bug missing required key '%s'." % required_key
+
+    if target == 'bug' and action == 'modify' and not bug.get('is_private'):
+        change_error = validate_change_list(event.get('changes'), 'Payload event changes')
+        if change_error:
+            return change_error
+
+    if target == 'comment' and action == 'create':
+        comment = bug.get('comment')
+        if not isinstance(comment, dict):
+            return "Payload bug missing required 'comment' object."
+        if 'is_private' not in comment:
+            return "Payload comment missing required key 'is_private'."
+        if not comment.get('is_private'):
+            for required_key in ('body', 'number'):
+                if required_key not in comment:
+                    return "Payload comment missing required key '%s'." % required_key
+
+    if target == 'attachment' and action in ('create', 'modify'):
+        attachment = bug.get('attachment')
+        if not isinstance(attachment, dict):
+            return "Payload bug missing required 'attachment' object."
+        if 'file_name' not in attachment:
+            return "Payload attachment missing required key 'file_name'."
+        if action == 'create':
+            for required_key in ('description', 'content_type', 'id'):
+                if required_key not in attachment:
+                    return "Payload attachment missing required key '%s'." % required_key
+        if action == 'modify':
+            if 'description' not in attachment:
+                return "Payload attachment missing required key 'description'."
+            if 'changes' in event:
+                change_error = validate_change_list(event.get('changes'), 'Payload event changes')
+                if change_error:
+                    return change_error
+
+    return None
+
 def application(environ, start_response):
     if 'bz2discord_config' not in environ:
         return error500_response(environ, start_response,
@@ -292,28 +377,13 @@ def application(environ, start_response):
                 "Payload data is not valid JSON",
                 "Payload data is not valid JSON")
 
-    if 'event' not in bzdata or not isinstance(bzdata['event'], dict):
-        error_log(environ, "Payload missing required 'event' object")
-        save_payload_to_spool(environ, body, 'invalid.missing_event', config, webhook_config)
+    validation_error = validate_payload_schema(bzdata)
+    if validation_error:
+        error_log(environ, validation_error)
+        save_payload_to_spool(environ, body, 'invalid.schema', config, webhook_config)
         return error400_response(environ, start_response,
-                "Payload missing required 'event' object",
+                validation_error,
                 "Payload is missing required event data")
-
-    required_event_keys = ['user', 'target', 'action', 'routing_key']
-    for required_key in required_event_keys:
-        if required_key not in bzdata['event']:
-            error_log(environ, "Payload event missing required key '%s'" % required_key)
-            save_payload_to_spool(environ, body, 'invalid.missing_event_key', config, webhook_config)
-            return error400_response(environ, start_response,
-                    "Payload event missing required key '%s'" % required_key,
-                    "Payload is missing required event data")
-
-    if 'login' not in bzdata['event']['user']:
-        error_log(environ, "Payload event user missing required key 'login'")
-        save_payload_to_spool(environ, body, 'invalid.missing_event_user_login', config, webhook_config)
-        return error400_response(environ, start_response,
-                "Payload event user missing required key 'login'",
-                "Payload is missing required event user data")
 
     baseurl = webhook_config['source_baseurl']
 
