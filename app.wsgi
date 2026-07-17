@@ -23,6 +23,8 @@ DEFAULT_SPOOL_MAX_TOTAL_BYTES = 104857600
 DEFAULT_SPOOL_MAX_AGE_DAYS = 14
 DEFAULT_SPOOL_ENABLED = False
 DEFAULT_DISCORD_TIMEOUT_SECONDS = 10.0
+SPOOL_METADATA_PREFIX = 'X-Bz2Discord-'
+
 
 def error_log(environ, theError):
     print(theError, file=environ['wsgi.errors'])
@@ -168,21 +170,57 @@ def prune_spool_directory(spooldir, settings):
 
     return files, total_bytes
 
-def save_payload_to_spool(environ, body, routing_key, config=None, webhook_config=None):
+def sanitize_filename_part(value):
+    if value is None:
+        return 'none'
+    lowered = str(value).lower()
+    cleaned = []
+    for ch in lowered:
+        if ch.isalnum() or ch in ('-', '_', '.'):
+            cleaned.append(ch)
+        else:
+            cleaned.append('-')
+    sanitized = ''.join(cleaned).strip('-')
+    return sanitized or 'none'
+
+def spool_metadata_block(timestamp_string, payload_type, routing_key, webhook_id, event, relay_path):
+    metadata_lines = [
+        '%sSpool-Format: 1' % SPOOL_METADATA_PREFIX,
+        '%sPayload-Type: %s' % (SPOOL_METADATA_PREFIX, payload_type),
+        '%sCaptured-At-UTC: %s' % (SPOOL_METADATA_PREFIX, timestamp_string),
+        '%sRouting-Key: %s' % (SPOOL_METADATA_PREFIX, routing_key),
+    ]
+
+    if webhook_id:
+        metadata_lines.append('%sWebhook-ID: %s' % (SPOOL_METADATA_PREFIX, webhook_id))
+    if relay_path:
+        metadata_lines.append('%sRelay-Path: %s' % (SPOOL_METADATA_PREFIX, relay_path))
+    if isinstance(event, dict):
+        if 'target' in event:
+            metadata_lines.append('%sEvent-Target: %s' % (SPOOL_METADATA_PREFIX, event.get('target')))
+        if 'action' in event:
+            metadata_lines.append('%sEvent-Action: %s' % (SPOOL_METADATA_PREFIX, event.get('action')))
+
+    return ('\n'.join(metadata_lines) + '\n\n').encode('utf-8')
+
+def save_payload_to_spool(environ, body, routing_key, config=None, webhook_config=None, payload_type='bugzilla', webhook_id=None, event=None):
     # write what we received from Bugzilla to our spool directory for later debugging
     settings = spool_settings(config or {}, webhook_config or {})
     if not settings['enabled']:
-        return
-
-    body_size = len(body)
-    if settings['max_file_bytes'] >= 0 and body_size > settings['max_file_bytes']:
-        error_log(environ, "payload for '%s' not written to spool because it exceeds spool_max_file_bytes" % routing_key)
         return
 
     timestamp = datetime.datetime.utcnow()
     timestamp_string = timestamp.strftime("%Y%m%dT%H%M%SZ")
     uniq_string = uuid.uuid4()
     mydir = pathlib.Path(__file__).parent.resolve()
+    relay_path = environ.get('PATH_INFO')
+    metadata_prefix = spool_metadata_block(timestamp_string, payload_type, routing_key, webhook_id, event, relay_path)
+    spool_content = metadata_prefix + body
+    body_size = len(spool_content)
+    if settings['max_file_bytes'] >= 0 and body_size > settings['max_file_bytes']:
+        error_log(environ, "payload for '%s' not written to spool because it exceeds spool_max_file_bytes" % routing_key)
+        return
+
     spooldir = mydir / 'spool'
     try:
         files, total_bytes = prune_spool_directory(spooldir, settings)
@@ -202,10 +240,12 @@ def save_payload_to_spool(environ, body, routing_key, config=None, webhook_confi
         error_log(environ, "payload for '%s' not written to spool because spool_max_total_bytes would be exceeded" % routing_key)
         return
 
-    filename = spooldir / ('%s-%s' % (timestamp_string, uniq_string))
+    routing_key_part = sanitize_filename_part(routing_key)
+    payload_type_part = sanitize_filename_part(payload_type)
+    filename = spooldir / ('%s-%s-%s-%s' % (payload_type_part, timestamp_string, uniq_string, routing_key_part))
     try:
         with open(filename, 'wb') as fd:
-            fd.write(body)
+            fd.write(spool_content)
         os.chmod(filename, 0o600)
     except OSError as err:
         error_log(environ, "payload for '%s' not written to spool because spool file write failed: %s" % (routing_key, err))
@@ -408,7 +448,7 @@ def application(environ, start_response):
     validation_error = validate_payload_schema(bzdata)
     if validation_error:
         error_log(environ, validation_error)
-        save_payload_to_spool(environ, body, 'invalid.schema', config, webhook_config)
+        save_payload_to_spool(environ, body, 'invalid.schema', config, webhook_config, webhook_id=webhook_id)
         return error400_response(environ, start_response,
                 validation_error,
                 "Payload is missing required event data")
@@ -480,7 +520,7 @@ def application(environ, start_response):
             embed.set_description("Unhandled bug action: %s" % event["action"])
             error_log(environ, "Unhandled bug action: $s" % event["action"])
             # write what we received from Bugzilla to our spool directory for later debugging
-            save_payload_to_spool(environ, body, event['routing_key'], config, webhook_config)
+            save_payload_to_spool(environ, body, event['routing_key'], config, webhook_config, webhook_id=webhook_id, event=event)
     elif event['target'] == 'comment':
         if event['action'] == 'create':
             commentbody = ''
@@ -513,7 +553,7 @@ def application(environ, start_response):
             embed.set_description("Unhandled comment action: %s" % event["action"])
             error_log(environ, "Unhandled comment action: $s" % event["action"])
             # write what we received from Bugzilla to our spool directory for later debugging
-            save_payload_to_spool(environ, body, event['routing_key'], config, webhook_config)
+            save_payload_to_spool(environ, body, event['routing_key'], config, webhook_config, webhook_id=webhook_id, event=event)
     elif event['target'] == 'attachment':
         attachment = bug['attachment']
         if event['action'] == 'create':
@@ -543,7 +583,7 @@ def application(environ, start_response):
         embed.add_embed_field(name="Event Type", value=event['routing_key'], inline=False)
         error_log(environ, "Unhandled event type: %s" % event['routing_key'])
         # write what we received from Bugzilla to our spool directory for later debugging
-        save_payload_to_spool(environ, body, event['routing_key'], config, webhook_config)
+        save_payload_to_spool(environ, body, event['routing_key'], config, webhook_config, webhook_id=webhook_id, event=event)
     response = None
     webhook = None
     total_embeds = len(embeds_to_send)
@@ -562,7 +602,7 @@ def application(environ, start_response):
             response = webhook.execute()
         except (requests.RequestException, HTTPException, ValueError) as err:
             error_log(environ, "Discord webhook delivery failed: %s" % err)
-            save_payload_to_spool(environ, body, event['routing_key'], config, webhook_config)
+            save_payload_to_spool(environ, body, event['routing_key'], config, webhook_config, webhook_id=webhook_id, event=event)
             return error502_response(environ, start_response,
                     "Discord webhook delivery failed: %s" % err,
                     "Unable to forward webhook to Discord.")
@@ -579,9 +619,18 @@ def application(environ, start_response):
         error_log(environ, status)
         error_log(environ, response.content)
         # write what we received from Bugzilla to our spool directory for later debugging
-        save_payload_to_spool(environ, body, event['routing_key'], config, webhook_config)
+        save_payload_to_spool(environ, body, event['routing_key'], config, webhook_config, webhook_id=webhook_id, event=event)
         # and what we tried to send to Discord
-        save_payload_to_spool(environ, bytes(json.dumps(webhook.json),"utf-8"), 'Discord Webhook Payload', config, webhook_config)
+        save_payload_to_spool(
+            environ,
+            bytes(json.dumps(webhook.json),"utf-8"),
+            'discord.webhook_payload',
+            config,
+            webhook_config,
+            payload_type='discord',
+            webhook_id=webhook_id,
+            event=event,
+        )
 
     start_response(status, list(response.headers.items()))
     return [response.content]

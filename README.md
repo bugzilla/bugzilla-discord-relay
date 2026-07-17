@@ -82,3 +82,25 @@ The `spool_*` settings are optional limits for on-disk debug payload retention.
 * `spool_max_age_days` removes older files before new ones are written.
 
 All of the General Configuration settings default to the values shown in the sample config above, so you only need to include them in your config if you want to change a default. They can be set globally at the top level of the config file or within an individual webhook entry. A value set on a webhook overrides the global value for that webhook only, which is useful if production and staging share a config file but should keep different request or spool behavior, or if you only need to debug payloads coming from a specific sender or to a specific webhook.
+
+When spooling is enabled, files are written with a payload-type prefix in the filename (`bugzilla-...` or `discord-...`) and include a metadata header block at the top of the file. The metadata includes non-secret context such as payload type, routing key, webhook ID, and relay path.
+
+## Replaying spooled payloads
+
+`debug_test.py` can replay both legacy spool files and the newer metadata-header spool files. Metadata headers are stripped automatically before replay.
+
+Basic usage:
+
+``` shell
+./debug_test.py RELAY_URL PAYLOAD_FILE
+```
+
+Config-aware usage (recommended):
+
+``` shell
+./debug_test.py --relay-url https://relay.example --payload-file spool/bugzilla-... --config /path/to/bz2discord_config.json
+```
+
+With `--config`, the script loads `api_key_header` and `api_key_value` from the matching webhook entry in the relay config, so you do not need to pass auth headers manually. If the spool metadata includes a webhook ID, the script uses it automatically unless you provide `--webhook-id`.
+
+If you are rotating secrets, `--use-next-secret` tells the script to use `api_key_value_next` when available.
