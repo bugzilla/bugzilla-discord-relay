@@ -12,6 +12,7 @@ import hmac
 import hashlib
 import pathlib
 import datetime
+from http.client import HTTPException
 import requests
 from discord_webhook import DiscordWebhook, DiscordEmbed
 
@@ -21,6 +22,7 @@ DEFAULT_SPOOL_MAX_FILES = 1000
 DEFAULT_SPOOL_MAX_TOTAL_BYTES = 104857600
 DEFAULT_SPOOL_MAX_AGE_DAYS = 14
 DEFAULT_SPOOL_ENABLED = False
+DEFAULT_DISCORD_TIMEOUT_SECONDS = 10.0
 
 def error_log(environ, theError):
     print(theError, file=environ['wsgi.errors'])
@@ -73,6 +75,18 @@ def error413_response(environ, start_response, logerror, publicerror):
     start_response(status, response_headers)
     return [output]
 
+def error502_response(environ, start_response, logerror, publicerror):
+    status = '502 Bad Gateway'
+    output = '<html><head><title>Bad Gateway</title></head>'
+    output += '<h1>Bad Gateway</h1>'
+    output += "<p>%s</p>" % publicerror
+    output = bytes(output, encoding='utf-8')
+    response_headers = [('Content-type', 'text/html, charset=utf-8'),
+                        ('Content-Length', str(len(output)))]
+    error_log(environ, logerror)
+    start_response(status, response_headers)
+    return [output]
+
 def config_int(config, key, default_value):
     value = config.get(key, default_value)
     try:
@@ -85,6 +99,13 @@ def config_bool(config, key, default_value):
     if isinstance(value, bool):
         return value
     return default_value
+
+def config_float(config, key, default_value):
+    value = config.get(key, default_value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default_value
 
 def effective_setting(config, webhook_config, key, default_value, converter=None):
     if key in webhook_config:
@@ -357,6 +378,13 @@ def application(environ, start_response):
                 "The webhook you specified does not exist.")
 
     max_request_bytes = effective_setting(config, webhook_config, 'max_request_bytes', DEFAULT_MAX_REQUEST_BYTES, config_int)
+    discord_timeout_seconds = effective_setting(
+        config,
+        webhook_config,
+        'discord_timeout_seconds',
+        DEFAULT_DISCORD_TIMEOUT_SECONDS,
+        config_float,
+    )
     content_length, content_length_error = request_content_length(environ)
     if content_length_error:
         return error400_response(environ, start_response,
@@ -520,13 +548,24 @@ def application(environ, start_response):
     webhook = None
     total_embeds = len(embeds_to_send)
     for idx, pending_embed in enumerate(embeds_to_send, start=1):
-        webhook = DiscordWebhook(url=webhook_url, rate_limit_retry=True)
+        webhook = DiscordWebhook(
+            url=webhook_url,
+            rate_limit_retry=True,
+            timeout=discord_timeout_seconds,
+        )
         webhook.add_embed(pending_embed)
         if total_embeds > 1:
             error_log(environ, "Forwarding webhook for %s to Discord! (%d/%d)" % (event['routing_key'], idx, total_embeds))
         else:
             error_log(environ, "Forwarding webhook for %s to Discord!" % event['routing_key'])
-        response = webhook.execute()
+        try:
+            response = webhook.execute()
+        except (requests.RequestException, HTTPException, ValueError) as err:
+            error_log(environ, "Discord webhook delivery failed: %s" % err)
+            save_payload_to_spool(environ, body, event['routing_key'], config, webhook_config)
+            return error502_response(environ, start_response,
+                    "Discord webhook delivery failed: %s" % err,
+                    "Unable to forward webhook to Discord.")
         if response.status_code != 200:
             break
 

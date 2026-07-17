@@ -40,6 +40,7 @@ The WSGIScriptAlias line above points the /bugzilla path after the domain to poi
 ``` json
 {
   "max_request_bytes": 262144,
+  "discord_timeout_seconds": 10,
   "spool_enabled": false,
   "spool_max_file_bytes": 262144,
   "spool_max_files": 1000,
@@ -66,9 +67,12 @@ The WSGIScriptAlias line above points the /bugzilla path after the domain to poi
 `source_baseurl` should contain the URL used as the "baseurl" for the Bugzilla the webhooks are coming from. For whatever reason, the payload of the webhook doesn't contain this anywhere, so this is needed to build the link to the bug that's included in the post to Discord. You should therefore assign a new webhook for any new Bugzilla you have pointed at it, so you can assign the baseurl to the correct Bugzilla.
 
 `api_key_header` and `api_key_value` are required by the relay and are sent by Bugzilla as a static shared-secret header on each webhook request. The header should generally start with "X-" and the value can be whatever you want, as long as the header and value both match what you enter in the config in Bugzilla when you create the webhook. `api_key_value_next` is optional and can be used during secret rotation so the relay will accept either the current secret or the next secret while you cut over the sender.
+
 ### General Configuration
 
 `max_request_bytes` is an optional limit for the size of a single inbound webhook request.
+
+`discord_timeout_seconds` is an optional timeout (in seconds) for each outbound request to Discord.
 
 The `spool_*` settings are optional limits for on-disk debug payload retention.
 * `spool_enabled` controls whether the relay writes debug payloads to the spool directory. Payloads that produce an error or contain an unhandled event type get written to the spool directory if this is set, to allow you to debug them. If enabled, the rest of these settings help prevent it from filling up your disk if you forget to turn it off.
@@ -77,4 +81,4 @@ The `spool_*` settings are optional limits for on-disk debug payload retention.
 * `spool_max_total_bytes` caps the total size of the spool directory
 * `spool_max_age_days` removes older files before new ones are written.
 
-All of these settings default to the values shown in the sample config above, so you only need to include them in your config if you want to change a default. They can be set globally at the top level of the config file or within an individual webhook entry. A value set on a webhook overrides the global value for that webhook only, which is useful if production and staging share a config file but should keep different request or spool behavior, or if you only need to debug payloads coming from a specific sender or to a specific webhook.
+All of the General Configuration settings default to the values shown in the sample config above, so you only need to include them in your config if you want to change a default. They can be set globally at the top level of the config file or within an individual webhook entry. A value set on a webhook overrides the global value for that webhook only, which is useful if production and staging share a config file but should keep different request or spool behavior, or if you only need to debug payloads coming from a specific sender or to a specific webhook.
