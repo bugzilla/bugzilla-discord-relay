@@ -494,7 +494,7 @@ def application(environ, start_response):
                 # uses 3 fields, so limit each message chunk to 8 changes.
                 changes = sorted(
                     event['changes'],
-                    key=lambda change: {'status': 0, 'resolution': 1}.get(change['field'], 2))
+                    key=lambda change: {'status': 0, 'resolution': 1, 'product': 2, 'component': 3}.get(change['field'], 4))
                 chunk_size = 8
                 embeds_to_send = []
                 for i in range(0, len(changes), chunk_size):
