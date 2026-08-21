@@ -492,7 +492,9 @@ def application(environ, start_response):
             else:
                 # Discord allows at most 25 embed fields. Each Bugzilla change
                 # uses 3 fields, so limit each message chunk to 8 changes.
-                changes = event['changes']
+                changes = sorted(
+                    event['changes'],
+                    key=lambda change: {'status': 0, 'resolution': 1}.get(change['field'], 2))
                 chunk_size = 8
                 embeds_to_send = []
                 for i in range(0, len(changes), chunk_size):
