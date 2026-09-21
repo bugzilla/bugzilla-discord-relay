@@ -458,8 +458,13 @@ def application(environ, start_response):
     def build_base_embed(event, bug, baseurl):
         embed = DiscordEmbed(title='Webhook Event Received',
                 color='cccccc')
-        embed.set_author(name=event['user']['real_name'] or event['user']['login'],
-                icon_url="https://secure.gravatar.com/avatar/%s?d=mm&size=64" % hashlib.md5(event['user']['login'].encode('utf-8')).hexdigest())
+        # For private bugs, the bug ID is the only real data allowed through,
+        # so the acting user's identity must not be revealed either.
+        if bug and bug.get('is_private'):
+            embed.set_author(name='Private Bug')
+        else:
+            embed.set_author(name=event['user']['real_name'] or event['user']['login'],
+                    icon_url="https://secure.gravatar.com/avatar/%s?d=mm&size=64" % hashlib.md5(event['user']['login'].encode('utf-8')).hexdigest())
         if bug:
             if bug['is_private']:
                 bug['summary'] = 'Private Bug'
@@ -514,10 +519,13 @@ def application(environ, start_response):
                     embeds_to_send = [embed]
         elif event['action'] == 'create':
             embed.set_color('00ff00')
-            embed.add_embed_field(name='New bug filed with fields:', value=' ', inline=False)
-            for field in bug:
-                if field not in ['id','assigned_to','status','summary','last_change_time','creator','creation_time','classification','product','component'] and isinstance(bug[field], str) and bug[field] not in ['', '--', '---']:
-                    embed.add_embed_field(name=field, value=bug[field], inline=True)
+            if bug['is_private']:
+                embed.add_embed_field(name='New private bug filed', value='Click through (with adequate permissions) to view details.', inline=False)
+            else:
+                embed.add_embed_field(name='New bug filed with fields:', value=' ', inline=False)
+                for field in bug:
+                    if field not in ['id','assigned_to','status','summary','last_change_time','creator','creation_time','classification','product','component'] and isinstance(bug[field], str) and bug[field] not in ['', '--', '---']:
+                        embed.add_embed_field(name=field, value=bug[field], inline=True)
         else:
             embed.set_description("Unhandled bug action: %s" % event["action"])
             error_log(environ, "Unhandled bug action: $s" % event["action"])
@@ -526,7 +534,8 @@ def application(environ, start_response):
     elif event['target'] == 'comment':
         if event['action'] == 'create':
             commentbody = ''
-            if bug['comment']['is_private']:
+            comment_hidden = bug['is_private'] or bug['comment']['is_private']
+            if comment_hidden:
                 commentbody = "Private comment - click through (with adequate permissions) to view"
             else:
                 commentbody = bug['comment']['body']
@@ -544,7 +553,7 @@ def application(environ, start_response):
                                     ('Content-Length', str(len(output)))]
                 start_response("200 OK", response_headers)
                 return [output]
-            if bug['comment']['is_private']:
+            if comment_hidden:
                 embed.add_embed_field(name="A private comment was added:", value=commentbody, inline=False)
             elif bug['comment']['number'] == 0:
                 embed.set_color('00ff00')
@@ -558,7 +567,13 @@ def application(environ, start_response):
             save_payload_to_spool(environ, body, event['routing_key'], config, webhook_config, webhook_id=webhook_id, event=event)
     elif event['target'] == 'attachment':
         attachment = bug['attachment']
-        if event['action'] == 'create':
+        if bug['is_private']:
+            embed.set_color('ff00ff' if event['action'] == 'create' else 'ffff00')
+            embed.add_embed_field(
+                name='Attachment %s' % ('added' if event['action'] == 'create' else 'modified'),
+                value='Click through (with adequate permissions) to view details.',
+                inline=False)
+        elif event['action'] == 'create':
             embed.set_color('ff00ff')
             embed.add_embed_field(name='Attachment added', value=attachment['file_name'], inline=False)
             embed.add_embed_field(name='Description', value=attachment['description'], inline=False)
