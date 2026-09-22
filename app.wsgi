@@ -489,34 +489,38 @@ def application(environ, start_response):
         bug = bzdata['bug']
         embed = build_base_embed(event, bug, baseurl)
         embeds_to_send = [embed]
-    if event['target'] == 'bug':
+    private_activity = bug.get('is_private') and not (
+        event['target'] == 'bug' and event['action'] == 'create')
+    if private_activity:
+        embed.set_color('cccccc')
+        embed.add_embed_field(
+            name='Activity occurred on this bug',
+            value='Click through (with adequate permissions) to view details.',
+            inline=False)
+    elif event['target'] == 'bug':
         if event['action'] == 'modify':
-            if bug['is_private']:
+            # Discord allows at most 25 embed fields. Each Bugzilla change
+            # uses 3 fields, so limit each message chunk to 8 changes.
+            changes = sorted(
+                event['changes'],
+                key=lambda change: {'status': 0, 'resolution': 1, 'product': 2, 'component': 3}.get(change['field'], 4))
+            chunk_size = 8
+            embeds_to_send = []
+            for i in range(0, len(changes), chunk_size):
+                change_chunk = changes[i:i + chunk_size]
+                chunk_embed = build_base_embed(event, bug, baseurl)
+                chunk_embed.set_color('ffff00')
+                for change in change_chunk:
+                    chunk_embed.add_embed_field(name='━━━━━━━━━━', value='**Field Modified:** %s' % change['field'], inline=False)
+                    chunk_embed.add_embed_field(name='Removed', value=change['removed'] or "_ _", inline=True)
+                    chunk_embed.add_embed_field(name='Added', value=change['added'] or "_ _", inline=True)
+                    if change['field'] == 'status' and change['added'] == 'RESOLVED':
+                        chunk_embed.set_color('ff0000')
+                embeds_to_send.append(chunk_embed)
+            if len(embeds_to_send) == 0:
                 embed.set_color('ffff00')
                 embed.add_embed_field(name='Bug modified', value='Click through for details', inline=False)
-            else:
-                # Discord allows at most 25 embed fields. Each Bugzilla change
-                # uses 3 fields, so limit each message chunk to 8 changes.
-                changes = sorted(
-                    event['changes'],
-                    key=lambda change: {'status': 0, 'resolution': 1, 'product': 2, 'component': 3}.get(change['field'], 4))
-                chunk_size = 8
-                embeds_to_send = []
-                for i in range(0, len(changes), chunk_size):
-                    change_chunk = changes[i:i + chunk_size]
-                    chunk_embed = build_base_embed(event, bug, baseurl)
-                    chunk_embed.set_color('ffff00')
-                    for change in change_chunk:
-                        chunk_embed.add_embed_field(name='━━━━━━━━━━', value='**Field Modified:** %s' % change['field'], inline=False)
-                        chunk_embed.add_embed_field(name='Removed', value=change['removed'] or "_ _", inline=True)
-                        chunk_embed.add_embed_field(name='Added', value=change['added'] or "_ _", inline=True)
-                        if change['field'] == 'status' and change['added'] == 'RESOLVED':
-                            chunk_embed.set_color('ff0000')
-                    embeds_to_send.append(chunk_embed)
-                if len(embeds_to_send) == 0:
-                    embed.set_color('ffff00')
-                    embed.add_embed_field(name='Bug modified', value='Click through for details', inline=False)
-                    embeds_to_send = [embed]
+                embeds_to_send = [embed]
         elif event['action'] == 'create':
             embed.set_color('00ff00')
             if bug['is_private']:
@@ -534,7 +538,7 @@ def application(environ, start_response):
     elif event['target'] == 'comment':
         if event['action'] == 'create':
             commentbody = ''
-            comment_hidden = bug['is_private'] or bug['comment']['is_private']
+            comment_hidden = bug['comment']['is_private']
             if comment_hidden:
                 commentbody = "Private comment - click through (with adequate permissions) to view"
             else:
@@ -567,13 +571,7 @@ def application(environ, start_response):
             save_payload_to_spool(environ, body, event['routing_key'], config, webhook_config, webhook_id=webhook_id, event=event)
     elif event['target'] == 'attachment':
         attachment = bug['attachment']
-        if bug['is_private']:
-            embed.set_color('ff00ff' if event['action'] == 'create' else 'ffff00')
-            embed.add_embed_field(
-                name='Attachment %s' % ('added' if event['action'] == 'create' else 'modified'),
-                value='Click through (with adequate permissions) to view details.',
-                inline=False)
-        elif event['action'] == 'create':
+        if event['action'] == 'create':
             embed.set_color('ff00ff')
             embed.add_embed_field(name='Attachment added', value=attachment['file_name'], inline=False)
             embed.add_embed_field(name='Description', value=attachment['description'], inline=False)
